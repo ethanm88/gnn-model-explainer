@@ -8,6 +8,9 @@ import pickle
 import random
 import shutil
 import time
+import pandas as pd
+from scipy.sparse import lil_matrix, csr_matrix
+
 
 import matplotlib
 import matplotlib.colors as colors
@@ -731,6 +734,83 @@ def syn_task5(args, writer=None):
 
     train_node_classifier(G, labels, model, args, writer=writer)
 
+def load_data(start_time, end_time, data_dir='elliptic_bitcoin_dataset'):
+    classes_csv = 'elliptic_txs_classes.csv'
+    edgelist_csv = 'elliptic_txs_edgelist.csv'
+    features_csv = 'elliptic_txs_features.csv'
+
+    # load in the data to pandas dataframes
+    classes = pd.read_csv(os.path.join(data_dir, classes_csv), index_col = 'txId')
+    edgelist = pd.read_csv(os.path.join(data_dir, edgelist_csv), index_col = 'txId1')
+    features = pd.read_csv(os.path.join(data_dir, features_csv), header = None, index_col = 0)
+
+    num_features = features.shape[1] # total number of features
+    num_tx = features.shape[0]	# total number of transactions
+    total_tx = list(classes.index)
+
+    # get the labelled transactions
+    labelled_classes = classes[classes['class'] != 'unknown']
+    labelled_tx = set(labelled_classes.index)
+
+    # now we need to prepare an adjacency matrix for each timestamp, using only the labelled transactions
+    adj_mats = []
+    features_labelled_ts = []
+    classes_ts = []
+    num_ts = 49 # number of timestamps from the paper
+
+    for ts in range(start_time, end_time):
+        # get features for the current timestamp
+        features_ts = features[features[1] == ts+1]
+        transactions_ts = list(features_ts.index) # transactions for the current timestamp
+        # get the labelled transactions for timestep
+        labeled_transaction_ts = [tx for tx in transactions_ts if tx in labelled_tx]
+
+        # Create a mapping for efficient index look-up
+        labeled_tx_id_to_index = {tx: i for i, tx in enumerate(labeled_transaction_ts)}
+
+        # get the edges to put into the adjecency matrix
+        edges_ts = edgelist[edgelist.index.isin(set(labeled_transaction_ts)) & edgelist['txId2'].isin(set(labeled_transaction_ts))]
+
+        # create the adjancency matrix for the current timestamp
+        adj_mtrix_ts = lil_matrix((len(labeled_transaction_ts), len(labeled_transaction_ts)))
+
+        for txId1, edge in edges_ts.iterrows():
+            adj_mtrix_ts[labeled_tx_id_to_index[txId1], labeled_tx_id_to_index[edge['txId2']]] = 1
+        ### TO DO Need to adapt the following code below to handle sparse changes
+
+        # filter features and classes to just the labeled transactions for this timestamp
+        features_ts = features_ts.loc[labeled_transaction_ts]
+        class_labelled = classes.loc[labeled_transaction_ts]
+
+        features_tensor = torch.from_numpy(features_ts.values).float()
+        class_tensor = torch.from_numpy(class_labelled['class'].astype(int).values).long()
+        class_tensor = class_tensor - 1 # normalize classes to be binary
+
+        adj_mats.append(adj_mtrix_ts)
+        features_labelled_ts.append(features_tensor)
+        classes_ts.append(class_tensor)
+
+    return adj_mats, features_labelled_ts, classes_ts
+
+def elliptic_task(args, writer=None):
+    print("Method:", args.method)
+    adj_mats, features_labelled_ts, classes_ts = load_data(0, 49)
+    config = {
+        "learning_rate": 0.01,
+        "epochs": 15,
+        "hidden_dim": 64,    # Hidden layer dimensionality
+        "output_dim": 2,     # Number of classes - assuming binary classification (illicit vs licit)
+        "dropout": 0.5,
+        "weight_decay": 5e-4 # Regularization, you can change this
+    }
+    args.loss_weight = torch.tensor([1, 5.0], dtype=torch.float).cuda()
+    model = models.GCN(nfeat = features_labelled_ts[0].shape[1], nhid = config["hidden_dim"], nclass = 2, dropout = 0.5)
+    # load model from model checkpoint
+    model.load_state_dict(torch.load('model_checkpoint.pt', map_location=torch.device('cpu')))
+    #model = model.cuda()
+
+    #train_node_classifier(G, labels, model, args, writer=writer)
+    
 
 def pkl_task(args, feat=None):
     with open(os.path.join(args.datadir, args.pkl_fname), "rb") as pkl_file:
@@ -1171,6 +1251,8 @@ def main():
             enron_task(prog_args, writer=writer)
         elif prog_args.dataset == "ppi_essential":
             ppi_essential_task(prog_args, writer=writer)
+        elif prog_args.dataset == "elliptic":
+            elliptic_task(prog_args, writer=writer)
 
     writer.close()
 

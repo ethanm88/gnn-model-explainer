@@ -616,3 +616,50 @@ class SoftPoolingGcnEncoder(GcnEncoderGraph):
             return loss + self.link_loss
         return loss
 
+
+
+class GraphConvolution(nn.Module):
+    def __init__(self, in_features, out_features, bias=True):
+        super(GraphConvolution, self).__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+
+        self.weight = nn.Parameter(torch.FloatTensor(in_features, out_features))
+        self.relu = nn.ReLU()
+        self.linear = nn.Linear(in_features, in_features)
+        if bias:
+            self.bias = nn.Parameter(torch.FloatTensor(out_features))
+        else:
+            self.register_parameter('bias', None)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        nn.init.xavier_uniform_(self.weight)
+        if self.bias is not None:
+            nn.init.zeros_(self.bias)
+
+    def forward(self, input, adj):
+      # add self loops to adjacency matrix for message passing
+      self.adj = adj + torch.eye(adj.shape[0])
+      # normalize adjacency matrix by degree
+      degrees = self.adj.sum(dim=0)
+      D_inv = torch.diag(torch.pow(degrees, -0.5))
+      adj_normalized = torch.matmul(torch.matmul(D_inv, self.adj), D_inv)
+
+      out = torch.matmul(torch.matmul(adj_normalized, input), self.weight) + self.bias
+      out = self.relu(out)
+      return out
+
+class GCN(nn.Module):
+    def __init__(self, nfeat, nhid, nclass, dropout):
+        super(GCN, self).__init__()
+
+        self.gc1 = GraphConvolution(nfeat, nhid)
+        self.gc2 = GraphConvolution(nhid, nclass)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x, adj):
+        x = F.relu(self.gc1(x, adj))
+        x = self.dropout(x)
+        x = self.gc2(x, adj)
+        return x

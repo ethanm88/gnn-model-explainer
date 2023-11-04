@@ -74,7 +74,8 @@ def create_filename(save_dir, args, isbest=False, num_epochs=-1):
         filename = os.path.join(filename, "best")
     elif num_epochs > 0:
         filename = os.path.join(filename, str(num_epochs))
-
+    if 'elliptic' in gen_prefix(args):
+        return filename + ".pth"
     return filename + ".pth.tar"
 
 
